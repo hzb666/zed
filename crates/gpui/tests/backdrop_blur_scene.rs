@@ -1,7 +1,7 @@
 use gpui::{
-    BackdropBlurEffect, BackdropBlurRect, Bounds, ContentMask, Hsla,
-    MAX_BACKDROP_BLUR_KERNEL_LEVELS, PrimitiveBatch, Quad, ScaledPixels, Scene, Size, hsla, point,
-    px, rgb, rgba,
+    BackdropBlurEffect, BackdropBlurRect, Bounds, ContentMask, Corners, Hsla,
+    MAX_BACKDROP_BLUR_KERNEL_LEVELS, MonochromeSprite, PolychromeSprite, PrimitiveBatch, Quad,
+    ScaledPixels, Scene, Shadow, Size, SubpixelSprite, Underline, hsla, point, px, rgb, rgba,
 };
 
 fn test_bounds(x: f32) -> Bounds<ScaledPixels> {
@@ -23,6 +23,7 @@ fn test_content_mask() -> ContentMask<ScaledPixels> {
                 height: ScaledPixels(1000.),
             },
         },
+        corner_radii: Corners::default(),
     }
 }
 
@@ -188,13 +189,50 @@ fn non_positive_backdrop_blur_rect_has_no_effective_kernel_levels() {
 
 #[test]
 fn backdrop_blur_rect_gpu_layout_matches_hlsl() {
-    assert_eq!(80, std::mem::size_of::<BackdropBlurRect>());
+    assert_eq!(96, std::mem::size_of::<BackdropBlurRect>());
     assert_eq!(0, std::mem::offset_of!(BackdropBlurRect, order));
     assert_eq!(4, std::mem::offset_of!(BackdropBlurRect, pad));
     assert_eq!(8, std::mem::offset_of!(BackdropBlurRect, bounds));
     assert_eq!(24, std::mem::offset_of!(BackdropBlurRect, content_mask));
-    assert_eq!(40, std::mem::offset_of!(BackdropBlurRect, corner_radii));
-    assert_eq!(56, std::mem::offset_of!(BackdropBlurRect, blur_radius));
-    assert_eq!(60, std::mem::offset_of!(BackdropBlurRect, opacity));
-    assert_eq!(64, std::mem::offset_of!(BackdropBlurRect, tint));
+    assert_eq!(56, std::mem::offset_of!(BackdropBlurRect, corner_radii));
+    assert_eq!(72, std::mem::offset_of!(BackdropBlurRect, blur_radius));
+    assert_eq!(76, std::mem::offset_of!(BackdropBlurRect, opacity));
+    assert_eq!(80, std::mem::offset_of!(BackdropBlurRect, tint));
+}
+
+#[test]
+fn content_mask_gpu_layout_matches_shaders() {
+    assert_eq!(32, std::mem::size_of::<ContentMask<ScaledPixels>>());
+    assert_eq!(0, std::mem::offset_of!(ContentMask<ScaledPixels>, bounds));
+    assert_eq!(
+        16,
+        std::mem::offset_of!(ContentMask<ScaledPixels>, corner_radii)
+    );
+}
+
+#[test]
+fn primitive_content_mask_layouts_match_shaders() {
+    assert_eq!(176, std::mem::size_of::<Quad>());
+    assert_eq!(24, std::mem::offset_of!(Quad, content_mask));
+    assert_eq!(56, std::mem::offset_of!(Quad, background));
+
+    assert_eq!(80, std::mem::size_of::<Underline>());
+    assert_eq!(24, std::mem::offset_of!(Underline, content_mask));
+    assert_eq!(56, std::mem::offset_of!(Underline, color));
+
+    assert_eq!(128, std::mem::size_of::<Shadow>());
+    assert_eq!(40, std::mem::offset_of!(Shadow, content_mask));
+    assert_eq!(72, std::mem::offset_of!(Shadow, color));
+
+    assert_eq!(128, std::mem::size_of::<MonochromeSprite>());
+    assert_eq!(24, std::mem::offset_of!(MonochromeSprite, content_mask));
+    assert_eq!(56, std::mem::offset_of!(MonochromeSprite, color));
+
+    assert_eq!(128, std::mem::size_of::<SubpixelSprite>());
+    assert_eq!(24, std::mem::offset_of!(SubpixelSprite, content_mask));
+    assert_eq!(56, std::mem::offset_of!(SubpixelSprite, color));
+
+    assert_eq!(112, std::mem::size_of::<PolychromeSprite>());
+    assert_eq!(32, std::mem::offset_of!(PolychromeSprite, content_mask));
+    assert_eq!(64, std::mem::offset_of!(PolychromeSprite, corner_radii));
 }

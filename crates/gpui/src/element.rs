@@ -513,6 +513,13 @@ impl<E: Element> Drawable<E> {
         window: &mut Window,
         cx: &mut App,
     ) -> (E::RequestLayoutState, E::PrepaintState) {
+        if matches!(
+            self.phase,
+            ElementDrawPhase::RequestLayout { .. } | ElementDrawPhase::LayoutComputed { .. }
+        ) {
+            self.prepaint(window, cx);
+        }
+
         match mem::take(&mut self.phase) {
             ElementDrawPhase::Prepaint {
                 node_id,
@@ -546,7 +553,11 @@ impl<E: Element> Drawable<E> {
                 self.phase = ElementDrawPhase::Painted;
                 (request_layout, prepaint)
             }
-            _ => panic!("must call prepaint before paint"),
+            ElementDrawPhase::Start => panic!("must call prepaint before paint: start"),
+            ElementDrawPhase::RequestLayout { .. } | ElementDrawPhase::LayoutComputed { .. } => {
+                unreachable!("paint should prepaint requested elements before painting")
+            }
+            ElementDrawPhase::Painted => panic!("must call prepaint before paint: already painted"),
         }
     }
 

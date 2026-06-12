@@ -937,8 +937,7 @@ impl Frame {
         let mut set_hover_hitbox_count = false;
         let mut hit_test = HitTest::default();
         for hitbox in self.hitboxes.iter().rev() {
-            let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
-            if bounds.contains(&position) {
+            if hitbox.bounds.contains(&position) && hitbox.content_mask.contains(&position) {
                 hit_test.ids.push(hitbox.id);
                 if !set_hover_hitbox_count
                     && hitbox.behavior == HitboxBehavior::BlockMouseExceptScroll
@@ -1764,13 +1763,14 @@ pub struct DispatchEventResult {
 }
 
 /// Indicates which region of the window is visible. Content falling outside of this mask will not be
-/// rendered. Currently, only rectangular content masks are supported, but we give the mask its own type
-/// to leave room to support more complex shapes in the future.
+/// rendered.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub struct ContentMask<P: Clone + Debug + Default + PartialEq> {
     /// The bounds
     pub bounds: Bounds<P>,
+    /// Corner radii applied to the mask bounds.
+    pub corner_radii: Corners<P>,
 }
 
 impl ContentMask<Pixels> {
@@ -1778,14 +1778,112 @@ impl ContentMask<Pixels> {
     pub fn scale(&self, factor: f32) -> ContentMask<ScaledPixels> {
         ContentMask {
             bounds: self.bounds.scale(factor),
+            corner_radii: self.corner_radii.scale(factor),
         }
     }
 
     /// Intersect the content mask with the given content mask.
     pub fn intersect(&self, other: &Self) -> Self {
         let bounds = self.bounds.intersect(&other.bounds);
-        ContentMask { bounds }
+        let corner_radii = Corners {
+            top_left: intersected_corner_radius(
+                bounds,
+                self,
+                other,
+                |bounds| (bounds.left(), bounds.top()),
+                |radii| radii.top_left,
+            ),
+            top_right: intersected_corner_radius(
+                bounds,
+                self,
+                other,
+                |bounds| (bounds.right(), bounds.top()),
+                |radii| radii.top_right,
+            ),
+            bottom_right: intersected_corner_radius(
+                bounds,
+                self,
+                other,
+                |bounds| (bounds.right(), bounds.bottom()),
+                |radii| radii.bottom_right,
+            ),
+            bottom_left: intersected_corner_radius(
+                bounds,
+                self,
+                other,
+                |bounds| (bounds.left(), bounds.bottom()),
+                |radii| radii.bottom_left,
+            ),
+        }
+        .clamp_radii_for_quad_size(bounds.size);
+
+        ContentMask {
+            bounds,
+            corner_radii,
+        }
     }
+
+    /// Returns whether the point falls inside the content mask, including rounded corners.
+    pub fn contains(&self, point: &Point<Pixels>) -> bool {
+        if !self.bounds.contains(point) {
+            return false;
+        }
+
+        if self.corner_radii == Corners::default() {
+            return true;
+        }
+
+        let half_width = self.bounds.size.width.0 / 2.;
+        let half_height = self.bounds.size.height.0 / 2.;
+        let center_x = self.bounds.origin.x.0 + half_width;
+        let center_y = self.bounds.origin.y.0 + half_height;
+        let center_to_x = point.x.0 - center_x;
+        let center_to_y = point.y.0 - center_y;
+        let corner_radius = if center_to_x < 0. {
+            if center_to_y < 0. {
+                self.corner_radii.top_left
+            } else {
+                self.corner_radii.bottom_left
+            }
+        } else if center_to_y < 0. {
+            self.corner_radii.top_right
+        } else {
+            self.corner_radii.bottom_right
+        }
+        .0;
+
+        if corner_radius <= 0. {
+            return true;
+        }
+
+        let corner_center_to_x = center_to_x.abs() - half_width + corner_radius;
+        let corner_center_to_y = center_to_y.abs() - half_height + corner_radius;
+        let outside_x = corner_center_to_x.max(0.);
+        let outside_y = corner_center_to_y.max(0.);
+        let outside_distance = (outside_x * outside_x + outside_y * outside_y).sqrt();
+        let inside_distance = corner_center_to_x.max(corner_center_to_y).min(0.);
+        let signed_distance = outside_distance + inside_distance - corner_radius;
+
+        signed_distance < 0.5
+    }
+}
+
+fn intersected_corner_radius(
+    bounds: Bounds<Pixels>,
+    a: &ContentMask<Pixels>,
+    b: &ContentMask<Pixels>,
+    corner: impl Fn(Bounds<Pixels>) -> (Pixels, Pixels),
+    radius: impl Fn(Corners<Pixels>) -> Pixels,
+) -> Pixels {
+    let bounds_corner = corner(bounds);
+    let mut corner_radius = Pixels::ZERO;
+    if corner(a.bounds) == bounds_corner {
+        corner_radius = corner_radius.max(radius(a.corner_radii));
+    }
+    if corner(b.bounds) == bounds_corner {
+        corner_radius = corner_radius.max(radius(b.corner_radii));
+    }
+    corner_radius
 }
 
 impl Window {
@@ -2519,8 +2617,10 @@ impl Window {
 
     #[inline]
     fn snapped_content_mask(&self) -> ContentMask<ScaledPixels> {
+        let content_mask = self.content_mask();
         ContentMask {
-            bounds: self.cover_bounds(self.content_mask().bounds),
+            bounds: self.cover_bounds(content_mask.bounds),
+            corner_radii: content_mask.corner_radii.scale(self.scale_factor()),
         }
     }
 
@@ -3379,6 +3479,7 @@ impl Window {
                     origin: Point::default(),
                     size: self.viewport_size,
                 },
+                corner_radii: Corners::default(),
             })
     }
 

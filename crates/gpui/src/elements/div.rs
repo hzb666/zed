@@ -1731,8 +1731,17 @@ impl Element for Div {
                     window.with_element_offset(scroll_offset, |window| {
                         if let Some(order_fn) = &self.prepaint_order_fn {
                             let order = order_fn(window, cx);
+                            let mut prepainted = vec![false; self.children.len()];
                             for idx in order {
-                                if let Some(child) = self.children.get_mut(idx) {
+                                if let Some(child) = self.children.get_mut(idx)
+                                    && !prepainted[idx]
+                                {
+                                    prepainted[idx] = true;
+                                    child.prepaint(window, cx);
+                                }
+                            }
+                            for (idx, child) in self.children.iter_mut().enumerate() {
+                                if !prepainted[idx] {
                                     child.prepaint(window, cx);
                                 }
                             }
@@ -2014,7 +2023,8 @@ impl Interactivity {
             |element_state, window| {
                 let mut element_state =
                     element_state.map(|element_state| element_state.unwrap_or_default());
-                let style = self.compute_style_internal(None, element_state.as_mut(), window, cx);
+                let mut style =
+                    self.compute_style_internal(None, element_state.as_mut(), window, cx);
 
                 if let Some(element_state) = element_state.as_mut() {
                     if let Some(clicked_state) = element_state.clicked_state.as_ref() {
@@ -2036,22 +2046,33 @@ impl Interactivity {
                     }
                 }
 
-                window.with_text_style(style.text_style().cloned(), |window| {
-                    window.with_content_mask(
-                        style.overflow_mask(bounds, window.rem_size()),
-                        |window| {
-                            let hitbox = if self.should_insert_hitbox(&style, window, cx) {
-                                Some(window.insert_hitbox(bounds, self.hitbox_behavior))
-                            } else {
-                                None
-                            };
+                window.with_content_mask(style.overflow_mask(bounds, window.rem_size()), |window| {
+                    let hitbox = if self.should_insert_hitbox(&style, window, cx) {
+                        Some(window.insert_hitbox(bounds, self.hitbox_behavior))
+                    } else {
+                        None
+                    };
 
-                            let scroll_offset =
-                                self.clamp_scroll_position(bounds, &style, window, cx);
-                            let result = f(&style, scroll_offset, hitbox, window, cx);
-                            (result, element_state)
-                        },
-                    )
+                    if let Some(hitbox) = hitbox.as_ref() {
+                        style = self.compute_style_internal(
+                            Some(hitbox),
+                            element_state.as_mut(),
+                            window,
+                            cx,
+                        );
+                    }
+
+                    window.with_text_style(style.text_style().cloned(), |window| {
+                        window.with_content_mask(
+                            style.overflow_mask(bounds, window.rem_size()),
+                            |window| {
+                                let scroll_offset =
+                                    self.clamp_scroll_position(bounds, &style, window, cx);
+                                let result = f(&style, scroll_offset, hitbox, window, cx);
+                                (result, element_state)
+                            },
+                        )
+                    })
                 })
             },
         )

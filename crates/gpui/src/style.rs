@@ -675,7 +675,20 @@ impl Style {
                     (false, false) => Bounds::from_corners(min, max),
                 };
 
-                Some(ContentMask { bounds })
+                let corner_radii = if self.overflow.x != Overflow::Visible
+                    && self.overflow.y != Overflow::Visible
+                {
+                    self.corner_radii
+                        .to_pixels(rem_size)
+                        .clamp_radii_for_quad_size(bounds.size)
+                } else {
+                    Corners::default()
+                };
+
+                Some(ContentMask {
+                    bounds,
+                    corner_radii,
+                })
             }
         }
     }
