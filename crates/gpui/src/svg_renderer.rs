@@ -227,6 +227,37 @@ impl SvgRenderer {
         }
     }
 
+    pub(crate) fn render_color_image(
+        &self,
+        params: &RenderSvgParams,
+        bytes: Option<&[u8]>,
+    ) -> Result<Option<(Size<DevicePixels>, Vec<u8>)>> {
+        anyhow::ensure!(!params.size.is_zero(), "can't render at a zero size");
+
+        let render_pixmap = |bytes| {
+            let pixmap = self.render_pixmap(bytes, SvgSize::Size(params.size))?;
+            let size = Size::new(
+                DevicePixels(pixmap.width() as i32),
+                DevicePixels(pixmap.height() as i32),
+            );
+            let mut bytes = pixmap.take();
+
+            for pixel in bytes.chunks_exact_mut(4) {
+                swap_rgba_pa_to_bgra(pixel);
+            }
+
+            Ok(Some((size, bytes)))
+        };
+
+        if let Some(bytes) = bytes {
+            render_pixmap(bytes)
+        } else if let Some(bytes) = self.asset_source.load(&params.path)? {
+            render_pixmap(&bytes)
+        } else {
+            Ok(None)
+        }
+    }
+
     fn render_pixmap(&self, bytes: &[u8], size: SvgSize) -> Result<Pixmap, usvg::Error> {
         let tree = usvg::Tree::from_data(bytes, &self.usvg_options)?;
         let svg_size = tree.size();
@@ -342,6 +373,28 @@ mod tests {
                 s
             );
         }
+    }
+
+    #[test]
+    fn render_color_image_preserves_original_svg_colors() {
+        let renderer = SvgRenderer::new(Arc::new(()));
+        let params = RenderSvgParams {
+            path: "inline.svg".into(),
+            size: Size::new(DevicePixels(20), DevicePixels(20)),
+        };
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#ff0000"/></svg>"##;
+
+        let (_, bytes) = renderer
+            .render_color_image(&params, Some(svg))
+            .expect("SVG should render")
+            .expect("Inline SVG should produce pixels");
+
+        assert!(
+            bytes
+                .chunks_exact(4)
+                .any(|pixel| pixel[2] > 200 && pixel[1] < 32 && pixel[0] < 32 && pixel[3] > 200),
+            "Rendered BGRA pixels should contain opaque red"
+        );
     }
 
     #[test]

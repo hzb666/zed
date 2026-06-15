@@ -1,16 +1,29 @@
 use std::{fs, path::Path, sync::Arc};
 
 use crate::{
-    App, Asset, Bounds, Element, GlobalElementId, Hitbox, InspectorElementId, InteractiveElement,
-    Interactivity, IntoElement, LayoutId, Pixels, Point, Radians, SharedString, Size,
-    StyleRefinement, Styled, TransformationMatrix, Window, point, px, radians, size,
+    App, Asset, Bounds, Element, GlobalElementId, Hitbox, Hsla, InspectorElementId,
+    InteractiveElement, Interactivity, IntoElement, LayoutId, Pixels, Point, Radians, SharedString,
+    Size, StyleRefinement, Styled, TransformationMatrix, Window, point, px, radians, size,
 };
 use gpui_util::ResultExt;
+
+/// Controls how an SVG element renders its colors.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SvgColorMode {
+    /// Render the SVG as an alpha mask tinted by the element's text color.
+    #[default]
+    CurrentColor,
+    /// Render the SVG with its original fill and stroke colors.
+    ///
+    /// This mode uses the polychrome sprite path and does not apply `with_transformation`.
+    Original,
+}
 
 /// An SVG element.
 pub struct Svg {
     interactivity: Interactivity,
     transformation: Option<Transformation>,
+    color_mode: SvgColorMode,
     path: Option<SharedString>,
     external_path: Option<SharedString>,
 }
@@ -21,6 +34,7 @@ pub fn svg() -> Svg {
     Svg {
         interactivity: Interactivity::new(),
         transformation: None,
+        color_mode: SvgColorMode::default(),
         path: None,
         external_path: None,
     }
@@ -44,6 +58,43 @@ impl Svg {
     pub fn with_transformation(mut self, transformation: Transformation) -> Self {
         self.transformation = Some(transformation);
         self
+    }
+
+    /// Set how the SVG element renders its colors.
+    pub fn color_mode(mut self, color_mode: SvgColorMode) -> Self {
+        self.color_mode = color_mode;
+        self
+    }
+
+    fn paint_svg(
+        color_mode: SvgColorMode,
+        transformation: Option<Transformation>,
+        bounds: Bounds<Pixels>,
+        path: SharedString,
+        data: Option<&[u8]>,
+        color: Option<Hsla>,
+        window: &mut Window,
+        cx: &App,
+    ) {
+        match color_mode {
+            SvgColorMode::CurrentColor => {
+                let Some(color) = color else {
+                    return;
+                };
+                let transformation = transformation
+                    .map(|transformation| {
+                        transformation.into_matrix(bounds.center(), window.scale_factor())
+                    })
+                    .unwrap_or_default();
+
+                window
+                    .paint_svg(bounds, path, data, transformation, color, cx)
+                    .log_err();
+            }
+            SvgColorMode::Original => {
+                window.paint_color_svg(bounds, path, data, cx).log_err();
+            }
+        }
     }
 }
 
@@ -108,6 +159,11 @@ impl Element for Svg {
     ) where
         Self: Sized,
     {
+        let path = self.path.clone();
+        let external_path = self.external_path.clone();
+        let color_mode = self.color_mode;
+        let transformation = self.transformation;
+
         self.interactivity.paint(
             global_id,
             inspector_id,
@@ -116,21 +172,18 @@ impl Element for Svg {
             window,
             cx,
             |style, window, cx| {
-                if let Some((path, color)) = self.path.as_ref().zip(style.text.color) {
-                    let transformation = self
-                        .transformation
-                        .as_ref()
-                        .map(|transformation| {
-                            transformation.into_matrix(bounds.center(), window.scale_factor())
-                        })
-                        .unwrap_or_default();
-
-                    window
-                        .paint_svg(bounds, path.clone(), None, transformation, color, cx)
-                        .log_err();
-                } else if let Some((path, color)) =
-                    self.external_path.as_ref().zip(style.text.color)
-                {
+                if let Some(path) = path.as_ref() {
+                    Self::paint_svg(
+                        color_mode,
+                        transformation,
+                        bounds,
+                        path.clone(),
+                        None,
+                        style.text.color,
+                        window,
+                        cx,
+                    );
+                } else if let Some(path) = external_path.as_ref() {
                     let Some(bytes) = window
                         .use_asset::<SvgAsset>(path, cx)
                         .and_then(|asset| asset.log_err())
@@ -138,24 +191,16 @@ impl Element for Svg {
                         return;
                     };
 
-                    let transformation = self
-                        .transformation
-                        .as_ref()
-                        .map(|transformation| {
-                            transformation.into_matrix(bounds.center(), window.scale_factor())
-                        })
-                        .unwrap_or_default();
-
-                    window
-                        .paint_svg(
-                            bounds,
-                            path.clone(),
-                            Some(&bytes),
-                            transformation,
-                            color,
-                            cx,
-                        )
-                        .log_err();
+                    Self::paint_svg(
+                        color_mode,
+                        transformation,
+                        bounds,
+                        path.clone(),
+                        Some(&bytes),
+                        style.text.color,
+                        window,
+                        cx,
+                    );
                 }
             },
         )

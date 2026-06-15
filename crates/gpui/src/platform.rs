@@ -1013,6 +1013,7 @@ pub fn get_gamma_correction_ratios(gamma: f32) -> [f32; 4] {
 pub enum AtlasKey {
     Glyph(RenderGlyphParams),
     Svg(RenderSvgParams),
+    ColorSvg(RenderSvgParams),
     Image(RenderImageParams),
 }
 
@@ -1037,6 +1038,7 @@ impl AtlasKey {
                 }
             }
             AtlasKey::Svg(_) => AtlasTextureKind::Monochrome,
+            AtlasKey::ColorSvg(_) => AtlasTextureKind::Polychrome,
             AtlasKey::Image(_) => AtlasTextureKind::Polychrome,
         }
     }

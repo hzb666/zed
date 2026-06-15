@@ -4120,6 +4120,24 @@ impl Window {
         Ok(())
     }
 
+    fn smooth_svg_bounds(
+        bounds: Bounds<ScaledPixels>,
+        tile_size: Size<DevicePixels>,
+    ) -> Bounds<ScaledPixels> {
+        let svg_bounds = Bounds {
+            origin: bounds.center()
+                - Point::new(
+                    ScaledPixels(tile_size.width.0 as f32 / SMOOTH_SVG_SCALE_FACTOR / 2.),
+                    ScaledPixels(tile_size.height.0 as f32 / SMOOTH_SVG_SCALE_FACTOR / 2.),
+                ),
+            size: tile_size.map(|value| ScaledPixels(value.0 as f32 / SMOOTH_SVG_SCALE_FACTOR)),
+        };
+
+        svg_bounds
+            .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
+            .map_size(|size| size.ceil())
+    }
+
     /// Paint a monochrome SVG into the scene for the next frame at the current stacking context.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
@@ -4127,7 +4145,7 @@ impl Window {
         &mut self,
         bounds: Bounds<Pixels>,
         path: SharedString,
-        mut data: Option<&[u8]>,
+        data: Option<&[u8]>,
         transformation: TransformationMatrix,
         color: Hsla,
         cx: &App,
@@ -4157,20 +4175,7 @@ impl Window {
             return Ok(());
         };
         let content_mask = self.snapped_content_mask();
-        let svg_bounds = Bounds {
-            origin: bounds.center()
-                - Point::new(
-                    ScaledPixels(tile.bounds.size.width.0 as f32 / SMOOTH_SVG_SCALE_FACTOR / 2.),
-                    ScaledPixels(tile.bounds.size.height.0 as f32 / SMOOTH_SVG_SCALE_FACTOR / 2.),
-                ),
-            size: tile
-                .bounds
-                .size
-                .map(|value| ScaledPixels(value.0 as f32 / SMOOTH_SVG_SCALE_FACTOR)),
-        };
-        let final_bounds = svg_bounds
-            .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
-            .map_size(|size| size.ceil());
+        let final_bounds = Self::smooth_svg_bounds(bounds, tile.bounds.size);
 
         self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,
@@ -4182,6 +4187,60 @@ impl Window {
             transformation,
         });
 
+        Ok(())
+    }
+
+    /// Paint a color SVG into the scene for the next frame at the current stacking context.
+    ///
+    /// This preserves the SVG's original fill and stroke colors, caching the rasterized result
+    /// in the polychrome atlas by asset path and target size.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_color_svg(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        path: SharedString,
+        data: Option<&[u8]>,
+        cx: &App,
+    ) -> Result<()> {
+        self.invalidator.debug_assert_paint();
+
+        let bounds = self.snap_bounds(bounds);
+
+        let params = RenderSvgParams {
+            path,
+            size: bounds.size.map(|pixels| {
+                DevicePixels::from((pixels.0 * SMOOTH_SVG_SCALE_FACTOR).ceil() as i32)
+            }),
+        };
+
+        let Some(tile) = self.sprite_atlas.get_or_insert_with(
+            &crate::AtlasKey::ColorSvg(params.clone()),
+            &mut || {
+                let Some((size, bytes)) = cx.svg_renderer.render_color_image(&params, data)? else {
+                    return Ok(None);
+                };
+                Ok(Some((size, Cow::Owned(bytes))))
+            },
+        )?
+        else {
+            return Ok(());
+        };
+        let content_mask = self.snapped_content_mask();
+        let bounds = Self::smooth_svg_bounds(bounds, tile.bounds.size);
+        let corner_radii = Corners::default();
+        let opacity = self.element_opacity();
+
+        self.next_frame.scene.insert_primitive(PolychromeSprite {
+            order: 0,
+            pad: 0,
+            grayscale: false,
+            opacity,
+            bounds,
+            content_mask,
+            corner_radii,
+            tile,
+        });
         Ok(())
     }
 
